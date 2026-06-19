@@ -179,4 +179,4 @@ All attack simulations were performed in a controlled lab environment.
 
 ## 👤 Author
 
-**Phan Duy Khuong**
+**Pham Huynh Khanh Linh**
