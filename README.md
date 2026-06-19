@@ -166,7 +166,7 @@ alert tcp any any -> any any (
 * Experience with SIEM (ELK Stack) integration
 * Writing and tuning Snort detection rules
 * Log analysis and threat detection
-* Simulating real-world cyber attacks
+* Simulating real-world cyber attacks.
 
 ---
 
