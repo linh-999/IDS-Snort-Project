@@ -1,0 +1,307 @@
+# $Id: local.rules,v 1.11 2004/07/23 20:15:44 bmc Exp $
+# ----------------
+# LOCAL RULES
+# ----------------
+# This file intentionally does not come with signatures.  Put your local
+# additions here.
+##############################################################################
+# local.rules - Snort3 (Snort++) compatible local detection rules (PoC lab)
+# SID range: 3000100 - 3000200 (local)
+# Note: tune detection_filter/dcount/seconds to fit your lab load.
+##############################################################################
+# --- 6) Nessus / vulnerability scanner HTTP User-Agent fingerprint
+#    Many scanners identify themselves in User-Agent (Nessus, Tenable, OpenVAS, nikto)
+#alert http any any -> $HOME_NET any (
+#  msg:"NET DETECT Nessus/OpenVAS/Nikto/SQLMap HTTP scanner UA";
+#  http_header;
+#  pcre:"/Nessus|Tenable|OpenVAS|nikto|sqlmap/i";
+#  sid:3000201; rev:1; classtype:attempted-recon;
+#)
+
+# --- 7) Nessus-like TCP SYN behaviour (tighter threshold for portscans)
+#    Many vulnerability scanners perform rapid port scans to many ports.
+#alert tcp any any -> $HOME_NET any (
+#  msg:"NET DETECT Nessus-like SYN scan (many SYNs short window)";
+#  flags:S;
+#  detection_filter:track by_src, count 30, seconds 60;
+#  sid:3000202; rev:1; classtype:attempted-recon;
+#)
+
+
+# local.rules - phishing/SET detection (Snort3 compatible)
+
+# 1009401 - HTTP request có Host header là địa chỉ IP (phishing page host bằng IP)
+alert http $HOME_NET any -> any $HTTP_PORTS (
+    msg:"PHISH DETECT Social-Engineer Toolkit - HTTP request Host is numeric IP (possible phishing / SET site)";
+    flow:to_server,established;
+    http_header;
+    pcre:"/Host:\s*\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?/i";
+    sid:1009401; rev:1; classtype:attempted-admin;
+)
+# 1009301 - POST có (login|username) + (password|pass) trong body, đích là IP nội bộ (SET trong LAN)
+alert http $HOME_NET any -> $HOME_NET $HTTP_PORTS (
+    msg:"PHISH DETECT Social-Engineer Toolkit - POST credentials in body to local IP";
+    flow:to_server,established;
+    http_client_body;
+    pcre:"/(?:^|&)(?:login|username)=[^&]{1,128}&(?:password|pass)=[^&]{1,128}/i";
+    sid:1009301; rev:1; classtype:attempted-admin;
+)
+# 1009303 - (tuỳ chọn) Bắt mọi POST tới bất kỳ IP (dùng khi attacker có thể ở ngoài LAN)
+alert http $HOME_NET any -> any $HTTP_PORTS (
+    msg:"PHISH DETECT Social-Engineer Toolkit - POST with credentials in body (any dest)";
+    flow:to_server,established;
+    http_client_body;
+    pcre:"/(?:^|&)(?:login|username)=[^&]{1,128}&(?:password|pass)=[^&]{1,128}/i";
+    sid:1009303; rev:1; classtype:attempted-admin;
+)
+
+
+###############################################
+############################################################################
+# SLOWLORIS - Lab detection (low thresholds, PSH-only to avoid RST noise)
+############################################################################
+
+############################################################################
+# SLOWLORIS - LAB (rất nhạy, chỉ dùng test)
+# Yêu cầu: HOME_NET có dải của server, HTTP_PORTS có {80,8081,443,...}
+############################################################################
+
+# D0 - DEBUG: bắt mọi gói client->HTTP có payload nhỏ (để xác nhận sensor thấy gói)
+#alert tcp any any -> $HOME_NET $HTTP_PORTS (
+#    msg:"DEBUG tiny client packet to HTTP (lab)";
+#    flow:to_server;
+#    dsize:<120;                     # chỉ 1 dsize / rule
+#    sid:9911999; rev:2; classtype:unknown;
+#)
+alert tcp any any -> $HOME_NET [80,8081,443] (
+    msg:"SLOWHTTP Slowloris";
+    flow:to_server;
+    flags:!R;               # bỏ qua RST
+    dsize:<150;
+    detection_filter:track by_src, count 3, seconds 15;
+    sid:9911201; rev:1; classtype:attempted-dos;
+)
+
+
+# L1 - Slowloris: nhiều gói nhỏ drip header (không ràng established, KHÔNG lọc theo PSH)
+#   (Một số TCP stack không set PSH đều đặn, nên bỏ lọc flags để khỏi miss)
+#alert tcp any any -> $HOME_NET $HTTP_PORTS (
+#    msg:"SLOWHTTP/L1 - many tiny client header fragments (lab)";
+#    flow:to_server;
+#    dsize:<100;
+#    detection_filter:track by_src, count 5, seconds 30;
+#    sid:9911001; rev:3; classtype:attempted-dos;
+#)
+
+# L2 - SYN nhiều tới HTTP (mở nhiều socket chờ drip)
+alert tcp any any -> $HOME_NET $HTTP_PORTS (
+    msg:"SLOWHTTP/L2 - many SYNs to HTTP (by_src, lab)";
+    flags:S;
+    detection_filter:track by_src, count 20, seconds 60;
+    sid:9911002; rev:2; classtype:attempted-dos;
+)
+
+# L3 - Tổng hợp theo đích (nếu phân tán nhiều nguồn)
+alert tcp any any -> $HOME_NET $HTTP_PORTS (
+    msg:"SLOWHTTP/L3 - many tiny client packets to same HTTP dst (by_dst, lab)";
+    flow:to_server;
+    dsize:<100;
+    detection_filter:track by_dst, count 100, seconds 60;
+    sid:9911003; rev:3; classtype:attempted-dos;
+)
+
+################################################
+# RST Hijack detection - heuristics + optional exact seq/ack matching
+################################################
+# DEBUG-BIDIR: bắt mọi RST (R hoặc R+ACK) cả 2 chiều — dùng chỉ để debug
+#alert tcp any any <> any any (
+#    msg:"RST Hijack - R bit set (bidirectional)";
+#    flags:RA;           # match R+ACK
+#    dsize:0;
+#    sid:999901; rev:1; classtype:attempted-user;
+#)
+
+#alert tcp any any <> any any (
+#    msg:"RST Hijack - R only (bidirectional)";
+#    flags:R;            # match R only
+#    dsize:0;
+#    sid:999902; rev:1; classtype:attempted-user;
+#)
+
+# Inbound to HOME_NET (production intent) - use once debug OK
+#alert tcp any any -> $HOME_NET any (
+#    msg:"RST Hijack-DETECT inbound R to HOME_NET (R or R+ACK)";
+#    flags:RA;
+#    dsize:0;
+#    sid:3000301; rev:8; classtype:attempted-user;
+#)
+
+# Outbound from HOME_NET (if you want)
+#alert tcp $HOME_NET any -> any any (
+#    msg:"RST Hijack-DETECT outbound R from HOME_NET (R or R+ACK)";
+#    flags:RA;
+#    dsize:0;
+#    sid:3000303; rev:2; classtype:attempted-user;
+#)
+
+
+##################################################
+#TCP Hijacking
+##################################################
+
+# === 3) Suspicious User-Agent with Cookie header ===
+# Nếu thấy Cookie header nhưng trình duyệt là curl, python-requests, Wget, v.v.
+alert http any any -> $HOME_NET any (
+  msg:"SNORT SUSPICIOUS Cookie reuse by non-browser client (possible TCP hijack)";
+  http_header;
+  content:"Cookie:";  # không dùng nocase nữa, regex bên dưới đã có /i
+  pcre:"/User-Agent:\s*(?:curl|python|requests|wget|libwww-perl|java|Go-http-client)/i";
+  sid:3200003; rev:2; classtype:bad-unknown;
+  metadata:service http,policy security-incident;
+)
+# 3990001 - Minimal test: detect cleartext Cookie PHPSESSID to port 80 (outbound)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 80 (
+  msg:"TEST Cookie PHPSESSID on HTTP (minimal)";
+  content:"Cookie: PHPSESSID=";
+  sid:3990001; rev:1; classtype:attempted-user;
+)
+# 3500001 - Minimal test: detect Cookie header with JSESSIONID or PHPSESSID on outbound HTTP
+alert tcp $HOME_NET any -> $EXTERNAL_NET 80 (
+  msg:"TEST Cookie header containing session id (JSESSIONID|PHPSESSID)";
+  content:"Cookie:";
+  pcre:"/(?:JSESSIONID|PHPSESSID|sessionid|sid|auth|token)=/i";
+  sid:3500001; rev:1; classtype:attempted-user;
+  metadata:service http,policy security-incident;
+)
+
+# 3500002 - Detect session cookie used to access index.jsp (EditThisCookie case)
+alert http $HOME_NET any -> $EXTERNAL_NET any (
+  msg:"LOCAL HTTP Session Cookie used to access /index.jsp (possible EditThisCookie replay)";
+  http_header;
+  pcre:"/Cookie:\s*(?:.*(?:JSESSIONID|PHPSESSID|sessionid|sid|auth|token)=)/i";
+  http_uri;
+  content:"/index.jsp";
+  sid:3500002; rev:1; classtype:policy-violation;
+  metadata:service http,policy security-incident;
+)
+
+# 3500003 - Stronger: Browser-like UA + session cookie to /index.jsp (reduce FP)
+alert http $HOME_NET any -> $EXTERNAL_NET any (
+  msg:"LOCAL Browser UA + Session Cookie to /index.jsp (suspicious EditThisCookie reuse)";
+  http_header;
+  pcre:"/Cookie:\s*(?:.*(?:JSESSIONID|PHPSESSID|sessionid|sid|auth|token)=)/i";
+  pcre:"/User-Agent:\s*(?:Mozilla|Chrome|Firefox|Safari|Edg|OPR)/i";
+  http_uri;
+  content:"/index.jsp";
+  sid:3500003; rev:1; classtype:policy-violation;
+  metadata:service http,policy security-incident;
+)
+
+########
+#SQL INJECTION
+
+# 1) sqlmap User-Agent (match header text anywhere in payload)
+#alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"SQLI-TOOL sqlmap User-Agent detected"; flow:to_server,established; content:"User-Agent: sqlmap", nocase; sid:1002001; rev:1;)
+# 2) fallback: "sqlmap" anywhere
+#alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"SQLI-TOOL sqlmap token detected"; flow:to_server,established; content:"sqlmap", nocase; sid:1002006; rev:1;)
+
+# 3) UNION SELECT pattern in payload
+#alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"SQLI - possible UNION SELECT"; flow:to_server,established; content:"union select", nocase; detection_filter:track by_src, count 2, seconds 10; sid:1002002; rev:1;)
+
+# 4) Time-based SQLi keywords in payload (sleep/benchmark/waitfor)
+#alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"SQLI - time-based function detected (sleep/benchmark/waitfor)"; flow:to_server,established; content:"sleep(", nocase; content:"benchmark(", nocase; content:"waitfor", nocase; detection_filter:track by_src, count 1, seconds 5; sid:1002003; rev:1;)
+
+# 5) Tautology pattern ' OR 1=1
+#alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"SQLI - tautology pattern (or 1=1)"; flow:to_server,established; content:"or 1=1", nocase; detection_filter:track by_src, count 1, seconds 5; sid:1002004; rev:1;)
+# 6) information_schema enumeration
+#alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"SQLI - information_schema access attempt"; flow:to_server,established; content:"information_schema", nocase; detection_filter:track by_src, count 1, seconds 5; sid:1002005; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): command sep then more (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/(%26%26|&&|%7c%7c|\|\||%3b|;|%7c|\|)\s*more\b.*([A-Za-z]:\\\\|\/)/Ui"; classtype:web-application-attack; sid:3102201; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): cmd /c echo with redirection (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; nocase; content:"ip="; http_client_body; content:"cmd"; http_client_body; fast_pattern; pcre:"/cmd(\.exe)?\s*\/c\s*[\"'(]*\s*echo\b/Ui"; pcre:"/(%3e|>)\s*[\"']?[A-Za-z]:\\\\xampp\\\\tmp\\\\/Ui"; classtype:web-application-attack; sid:3102202; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): %7c%7c more path (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/%7c%7c\s*more\b.*([A-Za-z]:\\\\|\/)/Ui"; classtype:web-application-attack; sid:3202101; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): || more path (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/\x7c\x7c\s*more\b.*([A-Za-z]:\\\\|\/)/Ui"; classtype:web-application-attack; sid:3202102; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): || more path (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/(?i)\x7c\x7c\s*more\b.*?([A-Za-z]:\\\\|\/)/"; classtype:web-application-attack; sid:3302201; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): cmd /c echo > C:\\xampp\\tmp (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; content:"ip="; http_client_body; content:"cmd"; http_client_body; fast_pattern; pcre:"/(?i)cmd(\.exe)?\s*\/c\s*[\"'(]*\s*echo\b.*?(%3e|>)\s*[\"']?[A-Za-z]:\\\\xampp\\\\tmp\\\\/"; classtype:web-application-attack; sid:3302202; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"RCE (DVWA): cmd /c echo > C:\\xampp\\tmp (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; content:"cmd"; pcre:"/(?i)cmd(\.exe)?\s*\/c\s*[\"'(]*\s*echo\b.*?(%3e|>)\s*[\"']?[A-Za-z]:\\\\xampp\\\\tmp\\\\/"; classtype:web-application-attack; sid:3402202; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET 8081 (msg:"RCE (DVWA): || more path (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/(?i)\x7c\x7c\s*more\b.*?([A-Za-z]:\\\\\\\|\/)/"; classtype:web-application-attack; sid:5000001; rev:1;)
+#drop tcp $EXTERNAL_NET any -> $HOME_NET 8081 (msg:"RCE (DVWA): cmd /c echo > C:\\xampp\\tmp (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/(?i)cmd(\.exe)?\s*\/c\s*[\"'(]*\s*echo\b.*?(%3e|>)\s*[\"']?[A-Za-z]:\\\\\\\\xampp\\\\\\\\tmp\\\\\\\\/"; classtype:web-application-attack; sid:5000002; rev:1;)
+#alert http $EXTERNAL_NET any -> $HOME_NET 8081 (msg:"TEST RCE (DVWA): || more path (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/(?i)\x7c\x7c\s*more\b.*?([A-Za-z]:\\\\|\/)/"; classtype:web-application-attack; sid:1000010; rev:1;)
+#alert http $EXTERNAL_NET any -> $HOME_NET 8081 (msg:"TEST RCE (DVWA): cmd /c echo > C:\\xampp\\tmp (BODY)"; flow:to_server,established; content:"/dvwa/vulnerabilities/exec/"; http_uri; http_client_body; pcre:"/(?i)cmd(\.exe)?\s*\/c\s*[\"'(]*\s*echo\b.*?(%3e|>)\s*[\"']?[A-Za-z]:\\\\xampp\\\\tmp\\\\/"; classtype:web-application-attack; sid:1000011; rev:1;)
+
+
+#drop http $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"WEB RCE - drop suspicious shell operator or 'more' in URI"; flow:to_server,established; http_uri; pcre:"/(\|\||&&|;|`.+`|\$\(.+\)|\bmore\s+(?:[\/][^\s]+|[A-Za-z]:\\[^\s]+))/i"; sid:1005001; rev:2; classtype:web-application-attack;)
+#alert http $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"WEB RCE - suspicious shell operator or more in URI"; flow:to_server,established; http_uri; pcre:"/(\|\||&&|;|`[^`]*`|\$\([^\)]+\)|\bmore\s+(?:\/[^\s]+|[A-Za-z]:\\[^\s]+))/i"; sid:1005001; rev:3; classtype:web-application-attack;)
+#alert http $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"WEB RCE - suspicious shell operator or more in URI"; flow:to_server,established; http_uri; pcre:"/(\|\||&&|;|`[^`]*`|\$\([^\)]+\)|\bmore\s+(?:\/[^\s]+|[A-Za-z]:\\[^\s]+))/i"; sid:1005001; rev:3; classtype:web-application-attack;)
+#alert http $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS (msg:"WEB RCE - suspicious shell operator or more in URI"; flow:to_server,established; http_uri; pcre:"/(\|\||&&|;|`[^`]*`|\$\([^\)]+\)|\bmore\s+(?:\/[^\s]+|[A-Za-z]:\\[^\s]+))/i"; sid:1005001; rev:3; classtype:web-application-attack;)
+# 1) || then more /path in request body (Linux or Windows path)
+#alert http any any -> any 8081 (msg:"TEST RCE DVWA (encoded patterns in POST body)"; http_client_body; regex:"(?i)(\%7c\%7c\+more\+|\%26\%26\+cmd\+\%2fc|\%3eC\%3a\%5cxampp\%5ctmp\%5c)"; sid:1007202; rev:1; classtype:web-application-attack;)
+# 1) Bắt dạng URL-encoded (theo tcpdump: %7C%7C, %26%26, %2Fc, C%3A%5C...)
+
+#alert http any any -> any 8081 (msg:"WEB RCE DVWA - encoded patterns in POST body"; http_client_body; pcre:"/(%7C%7C\+more\+|%26%26\+cmd\+%2Fc|%3EC%3A%5Cxampp%5Ctmp%5C)/i"; sid:1100001; rev:1; classtype:web-application-attack;)
+alert tcp any any -> any 8081 (msg:"WEB RCE DVWA - encoded or plain in TCP payload"; flow:to_server,established; pcre:"/(%7C%7C\+more\+|%26%26\+cmd\+%2Fc|%3EC%3A%5Cxampp%5Ctmp%5C|\|\|\s*more\s+|&&\s*cmd\s+\/c|>C:\\\\xampp\\\\tmp\\\\)/i"; sid:1300001; rev:1; classtype:web-application-attack;)
+
+
+
+# Detect JSON POSTs containing "system_info"
+# ----------------------------
+# Match JSON key "system_info" anywhere in payload (no http_* dependence)
+alert tcp any any -> 192.168.8.131 9999 (
+    msg:"MALWARE-EXFIL: JSON POST contains \"system_info\" to C2:9999";
+    flow:established,to_server;
+    pcre:"/system_info/i";
+    classtype:trojan-activity;
+    sid:3002001;
+    rev:1;
+)
+
+# Match key "passwords" (array/object)
+alert tcp any any -> 192.168.8.131 9999 (
+    msg:"MALWARE-EXFIL: POST contains \"passwords\" array/object to C2:9999";
+    flow:established,to_server;
+    pcre:"/\"passwords\"/i";
+    classtype:trojan-activity;
+    sid:3002002;
+    rev:1;
+)
+
+# Match GET /checkin (simple line match)
+alert tcp any any -> 192.168.8.131 9999 (
+    msg:"MALWARE-CHECKIN: HTTP GET /checkin to C2:9999";
+    flow:established,to_server;
+    pcre:"/GET\s+\/checkin/i";
+    classtype:trojan-activity;
+    sid:3002006;
+    rev:1;
+)
+
+
+
+# Optional: Block all traffic to C2 IP (use ONLY in IPS mode if you want active blocking)
+#drop ip any any -> 192.168.8.131 any (
+#    msg:"BLOCK-MALICIOUS: DROP all traffic to known C2 192.168.8.131 (IPS mode)";
+#    classtype:trojan-activity;
+#    sid:2000007;
+#    rev:1;
+#)
+
+alert tcp 192.168.8.131 8000 -> any any (
+  msg:"KHUONG-INVOICE: JPEG response contains malware marker '===KHUONG_MALWARE_START==='";
+  flow:established,to_client;
+  content:"image/jpeg"; http_header;
+  file_data;
+  content:"===KHUONG_MALWARE_START===";
+  metadata:service http;
+  classtype:trojan-activity;
+  sid:3120002;
+  rev:1;
+)
+alert tcp 192.168.8.131 8000 -> any any (
+  msg:"KHUONG-INVOICE: Data appended after JPEG EOI (FFD9) containing malware marker";
+  flow:established,to_client;
+  content:"image/jpeg"; http_header;
+  file_data;
+  pcre:"/\xFF\xD9.{0,512}===KHUONG_MALWARE_START===/s";
+  metadata:service http;
+  classtype:trojan-activity;
+  sid:3120003;
+  rev:1;
+)
